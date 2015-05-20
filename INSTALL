@@ -1,0 +1,109 @@
+vault - INSTALLATION INSTRUCTIONS
+=================================
+
+This distribution contains a FreeBSD syntax
+Makefile that can be used to install this
+tool if run with required privileges (eg. root).
+
+Simply type:
+
+  $ make install
+
+This will:
+
+* create /usr/local/etc/vault/
+* create /usr/local/libdata/vault/
+* install /usr/local/etc/vault/vault.conf.sample
+* install /usr/local/libdata/vault/vault.util.subr
+* install /usr/local/libdata/vault/vault.conf.subr
+* install /usr/local/sbin/vault
+* replace %DATA_DIR% in /usr/local/sbin/vault with
+  /usr/local/libdata/vault
+* replace %CONF_DIR% in /usr/local/libdata/vault/vault.conf.subr
+  with /usr/local/etc/vault
+
+CONFIGURATION
+=============
+
+The `vault.conf` configuration file is a sh(1) syntax file
+that will be sourced by the script, similar to how rc.conf(5)
+works.
+
+The following variables must be set:
+- CONF_POOL, name of the pool you want to import after
+  decrypting the geli devices.
+- CONF_DEVPATTERN, string with sh(1) path expansion patterns
+  that the script will use to identify the devices it needs
+  to create the .eli devices for. Multiple patterns can be specified,
+  separated by whitespace. Between all specified patterns, the
+  devices to decrypt must be matched exact (nothing more, nothing
+  less).
+- CONF_DEVPATTERN, string with sh(10 path expansion patterns that
+  the script will use to identify the devices it needs to close
+  when detaching the unencrypted zpool again. Same rules as per
+  CONF_DEVPATTERN applies with regards to multiple patterns and
+  matching.
+- CONF_KEYFILE, this script expects all devices to be encrypted with
+  both a passphrase and a keyfile. This is the full path to the
+  keyfile. Must exist and be readable.
+  All devices are expected to use the same keyfile.
+- CONF_TMPDIR, the directory where the temporary fifo will be
+  created.
+- CONF_READ_TIMEOUT, the timeout specification for reading the
+  passphrase from user input. Must be a timeout specification
+  accepted by the sh(1) built-in `read` command.
+
+An example configuration file is provided.
+
+DEPENDENCIES
+============
+
+This tool does not require anything that is not part of the FreeBSD
+base system. It does however expect the following tools to be at
+their expected locations:
+
+- `/bin/realpath`
+- `/bin/sh`
+- `/bin/stty`
+- `/sbin/geli`
+- `/sbin/zpool`
+- `/usr/bin/awk`
+- `/usr/bin/install`
+- `/usr/bin/mkfifo`
+- `/usr/bin/mktemp`
+
+They are simply expected to be there and work.
+
+USAGE
+=====
+To attach the zpool:
+
+  $ vault attach
+
+  This will, if the pool is not already imported, gather all the
+  devices matched by CONF_DEVPATTERN and decrypt them if they are
+  not already attached.
+  It reads the passphrase from STDIN once and passes it to the
+  `geli attach` commands via named pipe configured as passphrase
+  file. The pipe is root:wheel with 600 permissions, filename
+  created via mktemp(1).
+
+  If there are any errors either importing the pool or decrypting
+  any of the devices, the script will abort and detach all
+  decrypted devices it finds via CONF_ELIPATTERN.
+
+To detach the zpool:
+
+  $ vault detach
+
+  This will export the pool if it is imported, and then detach all
+  geli devices found via CONF_ELIPATTERN.
+
+OUTPUT / EXIT CODES
+===================
+
+The tool writes some stuff on STDOUT and errors on STDERR. Exit codes
+kind of follow sysexits(3), unless something was missed.
+An exit code of 2 usually means something happened that was considered
+to not happen. In that case, the tool aborts without any cleanup to
+not make matters worse.

@@ -1,0 +1,226 @@
+#!/bin/sh -
+# vim: set ft=sh ffs=unix fenc=utf8:
+# vim: set et ts=2 sw=2 tw=72 nolist:
+#
+# Copyright (c) 2015, Joerg Pernfuss <code+github@paranoidbsd.net>
+# All rights reserved
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted providing that the following conditions
+# are met:
+# 1. Redistributions of source code must retain the above copyright
+#    notice, this list of conditions and the following disclaimer.
+# 2. Redistributions in binary form must reproduce the above copyright
+#    notice, this list of conditions and the following disclaimer in the
+#    documentation and/or other materials provided with the distribution.
+#
+# THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
+# IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+# WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+# ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
+# DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+# OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+# HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
+# STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
+# IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+# POSSIBILITY OF SUCH DAMAGE.
+
+# suck in configuration
+load_configuration () {
+  # assert we have a directory, then load config lib
+  : ${SUBR_DIR:?SUBR_DIR variable not set}
+  if ! [ -r "${SUBR_DIR}/vault.conf.subr" ]; then
+    exit 66
+  fi
+  . "${SUBR_DIR}/vault.conf.subr"
+
+  load_conf_file
+}
+
+# check if zpool is already imported, or
+# if unlocking is a noop
+check_zpool_is_imported () {
+  local _pool="${CONF_POOL}"
+
+  if /sbin/zpool list -H "${_pool}" >/dev/null 2>&1; then
+    printf '%s\n' "Pool ${_pool} already unlocked"
+    exit 0
+  fi
+}
+
+# check if keyfile is readable, or we can't
+# unlock the pool anyway
+check_keyfile () {
+  local _key="${CONF_KEYFILE}"
+
+  if [ ! -r "${_key}" ]; then
+    printf '%s\n' 'Error: keyfile is not readable' >&2
+    exit 66
+  fi
+}
+
+# disable input-echo on terminal, then read
+# passphrase from it
+read_passphrase () {
+  local _timeout="${CONF_READ_TIMEOUT}"
+  local _prompt="Enter Passphrase (Timeout ${_timeout}): "
+  local _ttycfg
+
+  _ttycfg=$( /bin/stty -g )
+  /bin/stty -echo
+
+  read -p "${_prompt}" -t "${_timeout}" PASS
+  if [ $? -ne 0 ]; then
+    /bin/stty "${_ttycfg}"
+    printf '\n%s\n' 'Error: timeout expired' >&2
+    exit 66
+  fi
+
+  /bin/stty "${_ttycfg}"
+  printf '%s\n' ""
+}
+
+# fifo management functions
+setup_fifo () {
+  local _tempfile="${CONF_TMPDIR}/vault.XXXXXXXXXXXX"
+
+  FIFO=$( /usr/bin/mktemp -u "${_tempfile}" )
+  /usr/bin/mkfifo -m 600 "${FIFO}"
+  if [ $? -ne 0 ]; then
+    rm -f "${FIFO}"
+    exit 73
+  fi
+  exec 5<>"${FIFO}"
+}
+
+cleanup_fifo () {
+  if [ -p "${FIFO}" ]; then
+    exec 5<&- 5>&-
+    rm -f "${FIFO}"
+  fi
+}
+
+# clean up and bail out
+exit_fault () {
+  geli_detach
+  cleanup_fifo
+  exit 2
+}
+
+# decrypt storage devices
+geli_attach () {
+  local _PATTERN="${CONF_DEVPATTERN}"
+  local _fifo="${FIFO}"
+  local _key="${CONF_KEYFILE}"
+  local _job _dev
+
+  printf '%s ' 'Decrypting storage devices:'
+  for _dev in $_PATTERN; do
+    # sh(1) returns the glob pattern if the pattern
+    # did not match. Skip if $_dev is substring of $_PATTERN
+    case "$_PATTERN" in
+      *"${_dev}"*)
+        continue
+        ;;
+    esac
+
+    # should not exist
+    if [ -e "${_dev}.eli" -a ! -c "${_dev}.eli" ]; then
+      printf '\n%s\n' "IMPOSTER ALERT! ${_dev}.eli!" >&2
+      exit 2
+    fi
+
+    # device already decrypted
+    if [ -c "${_dev}.eli" ]; then
+      printf '%s' '='
+      continue
+    fi
+
+    # attach storage device, reading passphrase
+    # from fifo
+    /sbin/geli attach -j "${_fifo}" \
+      -k "${_key}" "${_dev}" >/dev/null 2>&1 &
+    _job=$( jobid )
+    printf '%s\n' "${PASS}" >&5
+
+    wait $_job
+    if [ $? -ne 0 ]; then
+      ATTACH_FAULT=1
+      printf '%s' '!'
+      continue
+    fi
+    printf '%s' '+'
+  done
+
+  printf ' %s\n' 'done.'
+}
+
+# close decrypted devices
+geli_detach () {
+  local _PATTERN="${CONF_ELIPATTERN}"
+  local _eli
+
+  printf '%s ' 'Detaching decrypted storage devices:'
+  for _eli in $_PATTERN; do
+    # sh(1) returns the glob pattern if the pattern
+    # did not match. Skip if $_eli is substring of $_PATTERN
+    case "$_PATTERN" in
+      *"${_eli}"*)
+        continue
+        ;;
+    esac
+
+    # not something we can close
+    if ! [ -c "${_eli}" ]; then
+      continue
+    fi
+
+    # close decrypted device
+    /sbin/geli detach "${_eli}" >/dev/null 2>&1
+    if [ $? -ne 0 ]; then
+      printf '%s' '!'
+      continue
+    fi
+    printf '%s' '+'
+  done
+
+  printf ' %s\n' 'done.'
+}
+
+# try importing decrypted zpool
+import_zpool () {
+  local _pool="${CONF_POOL}"
+  local _p
+
+  printf '%s ' "Importing zpool ${_pool}:"
+  for _p in $( /sbin/zpool list -H -o name ); do
+    # pool is already imported
+    if [ "${_p}" = "${_pool}" ]; then
+      printf '%s\n' 'done.'
+      return
+    fi
+  done
+
+  # import
+  /sbin/zpool import "${_pool}" 2>/dev/null
+  if [ $? -ne 0 ]; then
+    IMPORT_FAULT=1
+    printf '%s\n' 'Error importing zpool' >&2
+    return
+  fi
+
+  printf '%s\n' 'done.'
+}
+
+# export the zpool
+export_zpool () {
+  local _pool="${CONF_POOL}"
+  
+  printf '%s ' "Exporting zpool ${_pool}:"
+  if /sbin/zpool list -H "${_pool}" >/dev/null 2>&1; then
+    /sbin/zpool export "${_pool}"
+  fi
+
+  printf '%s\n' 'done.'
+}

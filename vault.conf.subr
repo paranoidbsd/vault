@@ -1,0 +1,93 @@
+#!/bin/sh -
+# vim: set ft=sh ffs=unix fenc=utf8:
+# vim: set et ts=2 sw=2 tw=72 nolist:
+#
+# Copyright (c) 2015, Joerg Pernfuss <code+github@paranoidbsd.net>
+# All rights reserved
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted providing that the following conditions
+# are met:
+# 1. Redistributions of source code must retain the above copyright
+#    notice, this list of conditions and the following disclaimer.
+# 2. Redistributions in binary form must reproduce the above copyright
+#    notice, this list of conditions and the following disclaimer in the
+#    documentation and/or other materials provided with the distribution.
+#
+# THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
+# IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+# WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+# ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
+# DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+# OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+# HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
+# STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
+# IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+# POSSIBILITY OF SUCH DAMAGE.
+
+load_conf_file () {
+  local _confdir="%CONF_DIR%"
+  local _res
+
+  # source configuration file
+  if ! [ -r "${_confdir}/vault.conf" \
+    -a -f "${_confdir}/vault.conf" ]; then
+    printf '%s\n' 'Could not read/find configuration file' >&2
+    exit 66
+  fi
+  . "${_confdir}/vault.conf"
+
+  # config file assertions
+  #
+  # variables must be set / not-empty. can not
+  # check much further than that
+  : "${CONF_POOL:?CONF_POOL not configured}"
+  
+  : "${CONF_DEVPATTERN:?CONF_DEVPATTERN not configured}"
+  
+  : "${CONF_ELIPATTERN:?CONF_ELIPATTERN not configured}"
+
+  #
+  # variables must be set / not-empty. must resolve
+  # to valid paths. must be readable files.
+  : "${CONF_KEYFILE:?CONF_KEYFILE not configured}"
+  CONF_KEYFILE=$( /bin/realpath -q "${CONF_KEYFILE}" )
+  if [ $? -ne 0 ]; then
+    printf '%s\n' 'CONF_KEYFILE location invalid'
+    exit 66
+  fi
+  if ! [ -r "${CONF_KEYFILE}" \
+    -a -f "${CONF_KEYFILE}" ]; then
+    printf '%s\n' 'CONF_KEYFILE can not be read' >&2
+    exit 66
+  fi
+
+  : "${CONF_TMPDIR:?CONF_TMPDIR not configured}"
+  CONF_TMPDIR=$( /bin/realpath -q "${CONF_TMPDIR}" )
+  if [ $? -ne 0 ]; then
+    printf '%s\n' 'CONF_TMPDIR location invalid'
+    exit 66
+  fi
+  if ! [ -r "${CONF_TMPDIR}" \
+    -a -d "${CONF_TMPDIR}" \
+    -a -w "${CONF_TMPDIR}" \
+    -a -x "${CONF_TMPDIR}" ]; then
+    printf '%s\n' 'CONF_TMPDIR can not be used' >&2
+    exit 66
+  fi
+
+  #
+  # variable must be set / not-empty. specification must be
+  # all numbers or numbers followed by either s, m or h.
+  # Passphrase input timeout in hours is probably a dumb idea
+  : "${CONF_READ_TIMEOUT:?CONF_READ_TIMEOUT not configured}"
+  # XXX cringe()
+  _res=$( printf '%s\n' "${CONF_READ_TIMEOUT}" |\
+    /usr/bin/awk '{ if( /^[0-9]+[smh]?$/ ) print "match"; else print "unmatch"; }'
+  )
+  if [ "${_res}" = "unmatch" ]; then
+    printf '%s\n' 'CONF_READ_TIMEOUT invalid timeout spec' >&2
+    exit 65
+  fi
+}

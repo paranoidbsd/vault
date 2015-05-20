@@ -1,0 +1,69 @@
+#!/bin/sh
+# vim: set ft=sh ffs=unix fenc=utf8:
+# vim: set et ts=2 sw=2 tw=72 nolist:
+#
+# Copyright (c) 2015, Joerg Pernfuss <code+github@paranoidbsd.net>
+# All rights reserved
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted providing that the following conditions
+# are met:
+# 1. Redistributions of source code must retain the above copyright
+#    notice, this list of conditions and the following disclaimer.
+# 2. Redistributions in binary form must reproduce the above copyright
+#    notice, this list of conditions and the following disclaimer in the
+#    documentation and/or other materials provided with the distribution.
+#
+# THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
+# IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+# WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+# ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
+# DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+# OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+# HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
+# STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
+# IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+# POSSIBILITY OF SUCH DAMAGE.
+
+CMD="${1}"
+ATTACH_FAULT=0
+IMPORT_FAULT=0
+
+# load function library
+SUBR_DIR='%DATA_DIR%'
+if ! [ -r "${SUBR_DIR}/vault.util.subr" ]; then
+  exit 66
+fi
+. "${SUBR_DIR}/vault.util.subr"
+
+# load configuration file
+load_configuration
+
+case $CMD in
+  attach)
+    check_zpool_is_imported
+    check_keyfile
+    read_passphrase
+    setup_fifo
+    geli_attach
+    if [ $ATTACH_FAULT -eq 1 ]; then
+      exit_fault
+    fi
+    import_zpool
+    if [ $IMPORT_FAULT -eq 1 ]; then
+      exit_fault
+    fi
+    cleanup_fifo
+    ;;
+  detach)
+    export_zpool
+    geli_detach
+    ;;
+  *)
+    cat <<EOT
+usage: vault attach|detach
+EOT
+    exit 64
+    ;;
+esac

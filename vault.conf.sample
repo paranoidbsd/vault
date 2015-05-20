@@ -1,0 +1,16 @@
+# example vault configuration file
+#
+# the zpool that will be available after decrypting is called
+# like this
+CONF_POOL='ztank'
+# this will find all devices with a gpt label of either ztank0
+# to ztank9 or ztank10 to ztank99
+CONF_DEVPATTERN='/dev/gpt/ztank[0-9] /dev/gpt/ztank[0-9][0-9]'
+# how all the decrypted device nodes look like
+CONF_ELIPATTERN='/dev/gpt/ztank*.eli'
+# location of the decryption key file
+CONF_KEYFILE='/root/.ztank'
+# writable temp directory location
+CONF_TMPDIR='/tmp'
+# abort if no passphrase was entered in this time
+CONF_READ_TIMEOUT='25s'
